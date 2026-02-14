@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>幸运拼图 - 本地终极版</title>
+    <style>
+        :root {
+            --bg-color: #2c3e50;
+            --grid-gap: 8px;
+            --piece-size: 100px;
+            --highlight-color: #f1c40f;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            color: white;
+            padding-top: 30px;
+        }
+
+        /* 标题与次数 */
+        .header-info { text-align: center; margin-bottom: 20px; }
+        .limit-badge {
+            background: #f39c12;
+            color: #333;
+            padding: 5px 20px;
+            border-radius: 20px;
+            font-weight: bold;
+            display: inline-block;
+            margin-top: 10px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+        }
+
+        /* 九宫格容器 */
+        .grid-container {
+            display: grid;
+            grid-template-columns: repeat(3, var(--piece-size));
+            grid-template-rows: repeat(3, var(--piece-size));
+            gap: var(--grid-gap);
+            background: #34495e;
+            padding: 12px;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+
+        .piece {
+            width: var(--piece-size);
+            height: var(--piece-size);
+            background-color: #95a5a6;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            font-weight: bold;
+            color: rgba(255,255,255,0.2);
+            border-radius: 8px;
+            position: relative;
+            background-repeat: no-repeat;
+            overflow: hidden;
+        }
+
+        /* 1. 暹罗猫背景图 (使用你上传的原始文件名)
+           注意：确保图片和html在同一个文件夹 
+        */
+        .piece.collected {
+            background-image: url('350174c9ccdc010785e3113662f8190a.jpg'); 
+            background-size: 300px 300px; /* 3倍格宽，确保完整显示 */
+            color: transparent;
+            box-shadow: inset 0 0 0 1px rgba(255,255,255,0.2);
+        }
+
+        /* 2. 滚动高亮：美短猫图片 (使用你上传的原始文件名)
+           已移除白框，完全透明背景 
+        */
+        .piece.active {
+            z-index: 10;
+            background-image: url('79107df318fe1565ed0e682ec6117ef7.jpg') !important;
+            background-size: cover !important;
+            background-position: center !important;
+            background-color: transparent !important; /* 彻底透明 */
+            box-shadow: 0 0 15px var(--highlight-color);
+            border: none !important;
+            color: transparent;
+        }
+
+        .piece.miss::after {
+            content: '未中';
+            position: absolute;
+            inset: 0;
+            background: rgba(0,0,0,0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #e74c3c;
+            font-size: 18px;
+            font-weight: bold;
+        }
+
+        .controls { margin-top: 30px; display: flex; gap: 15px; }
+
+        button {
+            padding: 12px 35px;
+            font-size: 18px;
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: 0.2s;
+            box-shadow: 0 4px 0 rgba(0,0,0,0.2);
+        }
+
+        #startBtn { background: var(--highlight-color); color: #333; }
+        #startBtn:disabled { background: #7f8c8d; cursor: not-allowed; color: #ccc; }
+        #resetBtn { background: #e74c3c; color: white; font-size: 14px; }
+
+        .status-text { margin-top: 15px; height: 20px; color: #bdc3c7; font-size: 14px; }
+    </style>
+</head>
+<body>
+
+    <div class="header-info">
+        <h1>🧩 拼图大抽奖</h1>
+        <div class="limit-badge" id="limitInfo">读取中...</div>
+    </div>
+
+    <div class="grid-container" id="grid"></div>
+
+    <div id="status" class="status-text">每天都能抽 3 次，中不中都扣次数哦</div>
+
+    <div class="controls">
+        <button id="startBtn" onclick="startGame()">开始抽奖</button>
+        <button id="resetBtn" onclick="resetAll()">重置进度</button>
+    </div>
+
+    <video id="drawAudio" src="ca0876475876a5ba3b5cbcf81e7c0a74.mp4" style="display:none;"></video>
+
+    <script>
+        const CONFIG = {
+            maxDaily: 3,
+            winRate: 0.5,
+            path: [0, 1, 2, 5, 8, 7, 6, 3] 
+        };
+
+        let gameState = { collected: new Array(9).fill(false), isAnimating: false };
+        let dailyState = { date: '', count: 0 };
+        const audio = document.getElementById('drawAudio');
+
+        function init() {
+            const gridEl = document.getElementById('grid');
+            gridEl.innerHTML = '';
+            for(let i=0; i<9; i++) {
+                const div = document.createElement('div');
+                div.className = 'piece';
+                div.id = `piece-${i}`;
+                div.innerText = i + 1;
+                // 背景精准定位：实现“哪里亮了解锁哪里”
+                div.style.backgroundPosition = `${(i % 3) * -100}px ${Math.floor(i / 3) * -100}px`;
+                gridEl.appendChild(div);
+            }
+            loadData();
+            refreshUI();
+        }
+
+        function loadData() {
+            const progress = localStorage.getItem('local_puzzle_v1');
+            if (progress) gameState.collected = JSON.parse(progress);
+            
+            const today = new Date().toLocaleDateString();
+            const daily = localStorage.getItem('local_daily_v1');
+            if (daily) {
+                dailyState = JSON.parse(daily);
+                if (dailyState.date !== today) dailyState = { date: today, count: 0 };
+            } else {
+                dailyState = { date: today, count: 0 };
+            }
+        }
+
+        function refreshUI() {
+            const left = CONFIG.maxDaily - dailyState.count;
+            document.getElementById('limitInfo').innerText = `今日剩余: ${left} / ${CONFIG.maxDaily}`;
+            
+            const btn = document.getElementById('startBtn');
+            
+            // 只要没集齐，且还有次数，就保持按钮可用
+            if (gameState.collected.every(Boolean)) {
+                btn.disabled = true;
+                btn.innerText = "已集齐";
+                document.getElementById('status').innerText = "🏆 恭喜！暹罗猫已经拼好啦！";
+            } else if (left <= 0) {
+                btn.disabled = true;
+                btn.innerText = "明日再来";
+                document.getElementById('status').innerText = "今日次数已用完";
+            } else {
+                btn.disabled = false;
+                btn.innerText = "开始抽奖";
+            }
+
+            gameState.collected.forEach((owned, i) => {
+                const el = document.getElementById(`piece-${i}`);
+                if (owned) {
+                    el.classList.add('collected');
+                    el.innerText = '';
+                }
+            });
+
+            localStorage.setItem('local_puzzle_v1', JSON.stringify(gameState.collected));
+            localStorage.setItem('local_daily_v1', JSON.stringify(dailyState));
+        }
+
+        function startGame() {
+            if (gameState.isAnimating || dailyState.count >= CONFIG.maxDaily) return;
+
+            // 1. 立即扣除次数并刷新界面
+            dailyState.count++;
+            // 这里不立即调用refreshUI以防按钮闪烁，仅保存数据
+            localStorage.setItem('local_daily_v1', JSON.stringify(dailyState));
+            document.getElementById('limitInfo').innerText = `今日剩余: ${CONFIG.maxDaily - dailyState.count} / ${CONFIG.maxDaily}`;
+
+            gameState.isAnimating = true;
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('status').innerText = "美短猫正在跳跃...";
+            
+            // 播放声音
+            audio.currentTime = 0;
+            audio.play().catch(e => console.log("音频播放需交互"));
+
+            // 2. 决定结果
+            const unowned = [];
+            gameState.collected.forEach((v, i) => { if(!v) unowned.push(i); });
+            const isWin = Math.random() < CONFIG.winRate && unowned.length > 0;
+            const targetIdx = isWin ? unowned[Math.floor(Math.random()*unowned.length)] : Math.floor(Math.random()*9);
+            
+            // 3. 动画控制
+            let step = 0;
+            const finalPathIdx = targetIdx === 4 ? 8 : CONFIG.path.indexOf(targetIdx);
+            const totalSteps = 24 + finalPathIdx; // 转3圈
+
+            function run() {
+                document.querySelectorAll('.piece').forEach(p => p.classList.remove('active', 'miss'));
+                let cur = (step === totalSteps && targetIdx === 4) ? 4 : CONFIG.path[step % 8];
+                document.getElementById(`piece-${cur}`).classList.add('active');
+
+                if (step >= totalSteps) {
+                    gameState.isAnimating = false;
+                    audio.pause();
+                    
+                    if (isWin) {
+                        gameState.collected[targetIdx] = true;
+                        document.getElementById('status').innerText = "✨ 中奖啦！解锁了对应的拼图块！";
+                    } else {
+                        document.getElementById(`piece-${targetIdx}`).classList.add('miss');
+                        document.getElementById('status').innerText = "💨 没中，明天再来！";
+                    }
+                    
+                    // 延迟刷新UI，恢复按钮状态（如果还有次数）
+                    setTimeout(() => {
+                        document.querySelectorAll('.piece').forEach(p => p.classList.remove('miss'));
+                        refreshUI(); 
+                    }, 1200);
+                    return;
+                }
+                step++;
+                // 减速算法
+                let delay = step > totalSteps - 10 ? 80 + (step - (totalSteps - 10)) * 50 : 80;
+                setTimeout(run, delay);
+            }
+            run();
+        }
+
+        function resetAll() {
+            if(confirm("确定清空所有进度？")) {
+                localStorage.clear();
+                location.reload();
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>
